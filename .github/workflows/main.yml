@@ -1,0 +1,102 @@
+name: Build Kernel (4.9 - crDroid)
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 0 * * 6"
+  push:
+    branches:
+      - HEAD
+  pull_request:
+    branches:
+      - HEAD
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      CCACHE_COMPILERCHECK: "%compiler% -dumpmachine; %compiler% -dumpversion"
+      CCACHE_NOHASHDIR: "true"
+      CCACHE_MAXSIZE: "2G"
+      CCACHE_HARDLINK: "true"
+      KERNEL_DEFCONFIG: "begonia_user_defconfig"
+      KERNEL_CMDLINE: "ARCH=arm64 CC=clang CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- O=out"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: "true"
+          fetch-depth: 100
+
+      - name: Set up ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+
+      - name: Install dependencies & toolchain
+        run: |
+          sudo apt-get update -y
+
+          sudo apt install -y \
+            gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi \
+            aria2 binutils make python3 libssl-dev build-essential \
+            bc bison flex unzip ca-certificates xz-utils \
+            mkbootimg cpio device-tree-compiler git git-lfs curl wget
+
+          # python2 fallback (kalau dibutuhkan script lama)
+          sudo apt-get install -y python2 || true
+          if ! command -v python2 >/dev/null 2>&1; then
+            sudo ln -sf /usr/bin/python3 /usr/bin/python2
+          fi
+
+          # Clang crDroid
+          git clone --depth=1 \
+            https://gitlab.com/crdroidandroid/android_prebuilts_clang_host_linux-x86_clang-r547379.git \
+            google-clang
+
+          # KernelSU (hookless)
+          curl -LSs "https://raw.githubusercontent.com/RapliVx/KernelSU-Next/refs/heads/hookless-susfs/kernel/setup.sh" | bash -s hookless-susfs
+
+      - name: GetTime
+        id: get_time
+        run: echo "TIME=$(TZ=UTC+3 date +%s)" >> "$GITHUB_OUTPUT"
+
+      - name: Build Kernel (NO DTBO)
+        run: |
+          export PATH="$(pwd)/google-clang/bin/:$PATH"
+          export LD=ld.lld
+
+          echo ">>> Starting defconfig build..."
+          make $KERNEL_CMDLINE $KERNEL_DEFCONFIG CC="ccache clang" 2>&1 | tee build_defconfig.log
+
+          echo ">>> Disable DTBO config..."
+          scripts/config --file out/.config -d CONFIG_BUILD_ARM64_DT_OVERLAY || true
+          scripts/config --file out/.config -d CONFIG_OF_OVERLAY || true
+          make $KERNEL_CMDLINE olddefconfig
+
+          echo ">>> Start compiling Image only..."
+          make $KERNEL_CMDLINE CC="ccache clang" -j"$(nproc --all)" Image 2>&1 | tee build_kernel.log
+
+          BUILD_RESULT=${PIPESTATUS[0]}
+          if [ "$BUILD_RESULT" -ne 0 ]; then
+            echo "❌ Kernel build failed"
+            exit 1
+          fi
+
+      - name: Upload Build Logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Build_Logs-${{ steps.get_time.outputs.TIME }}
+          path: |
+            build_defconfig.log
+            build_kernel.log
+            patch.log
+            out/arch/arm64/boot/.config
+
+      - name: Upload Raw Kernel
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Kernel-${{ steps.get_time.outputs.TIME }}
+          path: |
+            out/arch/arm64/boot/Image
