@@ -1,4 +1,4 @@
-name: Build Kernel (4.9 - crDroid)
+name: Build Kernel (4.14 - crDroid)
 
 on:
   workflow_dispatch:
@@ -47,6 +47,12 @@ jobs:
             https://gitlab.com/crdroidandroid/android_prebuilts_clang_host_linux-x86_clang-r547379.git \
             google-clang
 
+          # Fix mkdtboimg.py (WAJIB untuk kernel lama)
+          MKDTBO_PATH="scripts/dtc/libfdt/mkdtboimg.py"
+          curl -L "https://android.googlesource.com/platform/system/libufdt/+/refs/heads/main/utils/src/mkdtboimg.py?format=TEXT" \
+            | base64 --decode > "$MKDTBO_PATH"
+          chmod +x "$MKDTBO_PATH"
+
           # KernelSU
           curl -LSs "https://raw.githubusercontent.com/RapliVx/KernelSU-Next/refs/heads/hookless-susfs/kernel/setup.sh" | bash -s hookless-susfs
 
@@ -54,11 +60,11 @@ jobs:
         id: get_time
         run: echo "TIME=$(TZ=UTC+3 date +%s)" >> "$GITHUB_OUTPUT"
 
-      - name: Build Kernel (FIX LLD + NO DTBO)
+      - name: Build Kernel (4.14 + DTBO)
         run: |
           export PATH="$(pwd)/google-clang/bin:$PATH"
 
-          # 🔥 Paksa LLVM toolchain full
+          # 🔥 Paksa LLVM toolchain FULL
           export CC=clang
           export LD=ld.lld
           export AR=llvm-ar
@@ -74,17 +80,12 @@ jobs:
             CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
             $KERNEL_DEFCONFIG 2>&1 | tee build_defconfig.log
 
-          echo ">>> Disable DTBO..."
-          scripts/config --file out/.config -d CONFIG_BUILD_ARM64_DT_OVERLAY || true
-          scripts/config --file out/.config -d CONFIG_OF_OVERLAY || true
-          make $KERNEL_CMDLINE olddefconfig
-
-          echo ">>> Build Image..."
+          echo ">>> Build Image + DTBO..."
           make $KERNEL_CMDLINE \
             LLVM=1 LLVM_IAS=1 \
             CROSS_COMPILE=aarch64-linux-gnu- \
             CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
-            -j$(nproc --all) Image 2>&1 | tee build_kernel.log
+            -j$(nproc --all) Image dtbo.img 2>&1 | tee build_kernel.log
 
           BUILD_RESULT=${PIPESTATUS[0]}
           if [ "$BUILD_RESULT" -ne 0 ]; then
@@ -102,10 +103,11 @@ jobs:
             build_kernel.log
             out/arch/arm64/boot/.config
 
-      - name: Upload Kernel
+      - name: Upload Kernel + DTBO
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: Kernel-${{ steps.get_time.outputs.TIME }}
           path: |
             out/arch/arm64/boot/Image
+            out/arch/arm64/boot/dtbo.img
