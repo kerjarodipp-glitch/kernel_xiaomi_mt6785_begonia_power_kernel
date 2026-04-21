@@ -54,7 +54,7 @@ jobs:
             google-clang
 
           # KernelSU (hookless)
-          curl -LSs "https://raw.githubusercontent.com/RapliVx/KernelSU-Next/refs/heads/hookless-susfs/kernel/setup.sh" | bash -s hookless-susfs
+          curl -LSs "https://raw.githubusercontent.com/RapliVx/KernelSU-Next/refs/heads/hookless/kernel/setup.sh" | bash -s hookless
 
       - name: GetTime
         id: get_time
